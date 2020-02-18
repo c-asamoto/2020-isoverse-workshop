@@ -1,18 +1,22 @@
 ---
-title: "5 ea irms example"
-author: sebbb
-date: "`r format(Sys.Date(), '%d %b %Y')`"
-output:
-  html_document: 
+title: "EA-IRMS data processing example"
+subtitle: "bulk carbon isotopes"
+date: "`r Sys.Date()`"
+output: 
+  rmarkdown::html_vignette:
+  html_document:
+    code_folding: show
     df_print: paged
-    css: stylesheet.css
     number_sections: yes
     toc: yes
-    toc_float: true
-    toc_depth: 3
-    code_folding: show
+    toc_depth: 2
+    toc_float: yes
 editor_options:
   chunk_output_type: console
+vignette: >
+  %\VignetteEncoding{UTF-8}
+  %\VignetteIndexEntry{EA-IRMS data processing example: carbon}
+  %\VignetteEngine{knitr::rmarkdown}
 ---
 
 ```{r setup, include = FALSE}
@@ -76,24 +80,27 @@ iso_files_raw <-
 
 ## Process file info & peak table (*)
 
-```{r}
-# peak identification
-peak_map <- 
-  tibble::tribble(
-    ~compound,     ~ref_nr, ~rt,
-    # peak map data (row-by-row)
-    "CO2 analyte", NA,		  300,
-    "CO2 ref",			1,	  	415,
-    "CO2 ref",			2,	  	465
-  )
-peak_map %>% knitr::kable(digits = 0)
+### Peak Table
 
-# process
-iso_files <- iso_files_raw %>% 
+```{r}
+# process peak table
+iso_files_w_peak_table <- iso_files_raw %>% 
   # set peak table from vendor data table
   iso_set_peak_table_from_auto_vendor_data_table() %>% 
   # convert units from mV to V for amplitudes and area
-  iso_convert_peak_table_units(V = mV, Vs = mVs) %>% 
+  iso_convert_peak_table_units(V = mV, Vs = mVs) 
+
+# iso_files_w_peak_table %>% iso_get_peak_table() %>% view() look at the peak table situation
+
+peak_table <- iso_files_w_peak_table %>% iso_get_peak_table()
+file_info <- iso_files_w_peak_table %>% iso_get_file_info # look at what the files have inside
+```
+
+### File Info
+
+```{r}
+# process file information
+iso_files_w_file_info <- iso_files_w_peak_table %>% 
   # rename key file info columns
   iso_rename_file_info(
     id1 = `Identifier 1`, id2 = `Identifier 2`, prep = Preparation,
@@ -103,7 +110,7 @@ iso_files <- iso_files_raw %>%
   iso_parse_file_info(number = c(seq_nr, analysis)) %>% 
   # process specific sequence file information
   iso_mutate_file_info(
-    # what is the type of each analysis?
+    # what is the type of each analysis? case when makes a new column called type and gives it a type characterization
     type = case_when(
       id1 == "empty"      ~ "empty",
       id1 == "blank"      ~ "blank",
@@ -119,17 +126,46 @@ iso_files <- iso_files_raw %>%
     folder = basename(dirname(file_path))
   ) %>% 
   # focus only on the relevant file info, discarding the rest
-  iso_select_file_info(folder, analysis, seq_nr, file_datetime, id1, id2, type, mass) %>% 
+  iso_select_file_info(folder, analysis, seq_nr, file_datetime, id1, id2, type, mass)
+```
+
+### File Filter
+
+```{r}
+# filter out files we don't want to process futher
+iso_files_without_empty <- iso_files_w_file_info %>% 
   # filter out emptys at the beginning of the run
-  iso_filter_files(type != "empty") %>% 
-  # identify peaks
-  iso_map_peaks(peak_map)
+  iso_filter_files(type != "empty") 
+
+#easy way to plot just one file 
+#iso_files_without_empty$`19605__pugel_73.dxf` %>% iso_plot_continuous_flow_data(peak_bounds = TRUE)
+> 
+```
+
+### Peak Mapping
+
+```{r}
+# identify peaks
+peak_map <- 
+  tibble::tribble(
+    ~compound,     ~ref_nr, ~rt,
+    # peak map data (row-by-row). defining the peaks you want it to label
+    "CO2 analyte", NA,		  300,
+    "CO2 ref",			1,	  	415,
+    "CO2 ref",			2,	  	465
+  )
+peak_map %>% knitr::kable(digits = 0)
+
+iso_files_w_mapped_peaks <- iso_files_without_empty %>% iso_map_peaks(peak_map)
 
 # show first few rows of the peak mappings summary (unmapped peaks = N2)
-iso_files %>% 
+iso_files_w_mapped_peaks %>% 
   iso_summarize_peak_mappings() %>% 
   head(10) %>% 
   knitr::kable()
+
+# assign final collection of iso_files to a simpler name
+iso_files <- iso_files_w_mapped_peaks
 ```
 
 ## Show file information
@@ -149,13 +185,13 @@ iso_files %>%
 iso_files %>% 
   # select a few analyses to show
   iso_filter_files(analysis %in% c(19642, 19656, 19681)) %>% 
-  # introduce a label column for coloring the lines
+  # introduce a label column for coloring the lines s print f means you are printing a formatted thing
   iso_mutate_file_info(label = sprintf("#%d: %s (%s)", analysis, id1, type)) %>% 
   # generate plot
   iso_plot_continuous_flow_data(
     # select data and aesthetics
     data = c(44), color = label, panel = NULL,
-    # peak labels for the analyte peak
+    # peak labels for the analyte peak, isoformat is a wrapper for sprintf so you could also use the command there. %d for integers, %s for string, %.3f for float 
     peak_label = iso_format(id1, rt, d13C, signif = 3),
     peak_label_size = 3,
     peak_label_filter = compound == "CO2 analyte"
@@ -184,6 +220,7 @@ iso_files %>%
   # add labels
   labs(x = "Sequence #", fill = "Reference\npeak")
 
+# going to create a new column called note so you can keep track of the randos
 iso_files <- iso_files %>% 
   iso_mutate_file_info(note = ifelse(seq_nr == 66, "ref peaks deviate > 0.5 permil in r46/44", ""))
 ```
@@ -249,12 +286,12 @@ peak_table %>%
   # mark +/- 1, 2, 3 std. deviation value ranges
   iso_mark_value_range(sd = c(1,2,3)) %>% 
   # mark outliers (those outside the 3 sigma range)
-  iso_mark_outliers(condition = abs(d13C - d13C_mean) > 3 * d13C_sd, label = analysis)
+  iso_mark_outliers(sd = 3, label = analysis)
 ```
 
 ## Identify outliers (*)
 
-Analys #19691 is more than 3 standard deviations outside the scale2 standard mean and therefore explicitly flagged as an is_outlier.
+Analysis #19691 is more than 3 standard deviations outside the scale2 standard mean and therefore explicitly flagged as an is_outlier.
 
 ```{r}
 # mark outlier
@@ -332,7 +369,7 @@ calib_drift <-
     model = c(
       lm(d13C_dev ~ 1), 
       lm(d13C_dev ~ file_datetime),
-      loess(d13C_dev ~ file_datetime, span = 0.5)
+      loess(d13C_dev ~ file_datetime, span = 0.5) # adding a spline (i.e. blue line)
     ),
     # specify which data points to use in the calibration
     use_in_calib = is_std_peak & type == "drift" & !is_outlier
@@ -342,6 +379,8 @@ calib_drift <-
 
 # visualize residuals
 calib_drift %>% iso_plot_residuals(x = file_datetime, date_breaks = "3 hours") 
+
+# spline technically looks the best, but it doesn't really improve the residuals so no need to add a drift correction
 ```
 
 Although a local polynomial (`loess`) correction would improve the overall variation in the residuals, this improvement is minor (<0.01 permil) and it is not clear that this correction addresses any systemic trend. Therefore, no drift correction is applied.
@@ -370,8 +409,13 @@ The linearity standard shows a systematic area-dependent effect on the measured 
 # run a set of regressions to evaluate linearity
 calib_linearity <- 
   peak_table_w_standards %>%
+  # adding this here if you want to use a calibration on only part of the run, then make sure you add the group by in iso_prepare_for_calibration. if not splitting, remove this mutate and the group by. you can do this with time_range as well.
+  mutate(signal_range = case_when(
+    area44 < 150 ~"low area",
+    TRUE ~ "high area"
+  )) %>% 
   # prepare for calibration
-  iso_prepare_for_calibration() %>% 
+  iso_prepare_for_calibration(group_by = signal_range) %>% 
   # run different calibrations
   iso_generate_calibration(
     calibration = "lin",
@@ -395,7 +439,7 @@ calib_linearity %>% iso_plot_residuals(x = area44)
 
 ```{r "linearity_coefs", fig.width = 5, fig.height=8}
 # show calibration coefficients
-calib_linearity %>% iso_plot_calibration_parameters()
+calib_linearity %>% iso_plot_calibration_parameters(shape = signal_range)
 ```
 
 It is clear that there is a small (~0.02 permil improvement in the residual) but significant (p < 0.05) linearity effect that could be reasonably corrected with any of the assessed area dependences. However, we will use the ` ~ area44` correction because it explains more of the variation in the signal range that the samples fall into (~ 100-250 Vs) as can be seen in the residuals plot.
@@ -404,10 +448,17 @@ It is clear that there is a small (~0.02 permil improvement in the residual) but
 
 ```{r}
 # apply calibration
-calib_linearity_applied <- 
-  calib_linearity %>% 
-  # decide which calibration to apply
-  filter(lin_calib == "lm(d13C_dev ~ area44)") %>% 
+# calib_linearity_applied <- 
+#   calib_linearity %>% 
+#   # decide which calibration to apply
+#   filter(lin_calib == "lm(d13C_dev ~ area44)") %>% 
+#   # apply calibration indication what should be calcculated
+#   iso_apply_calibration(predict = d13C_dev) %>% 
+#   # evaluate calibration range across area44
+#   iso_evaluate_calibration_range(area44)
+
+# or this with our split calibration 
+calib_linearity_applied <- calib_linearity %>% filter(signal_range == "low area" & lin_calib =="lm(d13C_dev ~ 1)" | signal_range == "high area" & lin_calib == "lm(13C_dev ~ area44)") %>% 
   # apply calibration indication what should be calcculated
   iso_apply_calibration(predict = d13C_dev) %>% 
   # evaluate calibration range across area44
@@ -632,7 +683,7 @@ peak_table_lin_scale_mass_corr %>%
 
 ### Check carbon percent drift
 
-It looks like there is quite some variation around the known valule --> check if there is temporal drift affecting the measured %C:
+It looks like there is quite some variation around the known value --> check if there is temporal drift affecting the measured %C:
 
 ```{r "mass_calibration_drift_check", fig.width=6, fig.height=6}
 peak_table_lin_scale_mass_corr %>% 
